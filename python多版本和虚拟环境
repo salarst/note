@@ -1,0 +1,32 @@
+在实际开发当中，不同的项目可能会使用到不同的版本包，使用pyevn可以解决多个相互独立的Python环境，以达到在同一台机器上使用不同的版本包进行开发
+
+1.安装pyenv
+		mkdir /usr/local/pyenv
+		cd pyenv
+		git clone https://github.com/pyenv/pyenv ./
+	2.设置环境变量
+		vim /etc/profile.d/pyenv
+			PYENV_ROOT=/usr/local/pyenv   
+			PATH=$PATH:$PYENV_ROOT/bin 
+			export $PATH
+			export PYENV_ROOT #修改默认的pyenv root
+		echo 'eval "$(pyenv init -)"  ' >> /etc/bashrc
+	3.安装python-build插件
+		cd /usr/local/pyenv/plugins/python-build
+		./install.sh
+	4. 安装多python版本
+		pyenv install python版本号(2.7.10)  #安装在$PYENV_ROOT/versions/
+		pyenv rehash  #更新数据库
+	5.安装Pyenv-virtualenv插件
+		cd /usr/local/pyenv/plugins/
+		mkdir pyenv-virtualenv
+		cd pyenv-virtualenv
+		git clone https://github.com/pyenv/pyenv-virtualenv
+		./install.sh
+		pyenv rehash
+	6.切换环境
+		pyenv virtualenv python版本号 ENV_NAME #建立虚拟环境，目录位置$PEYVN_ROOT/versions/ENV_NAME
+		pyenv virtual-deleted  #删除版本
+		pyenv activate ENV_NAME #激活虚拟环境
+		pyenv deactive #退出虚拟环境
+		pip install …  #安装虚拟环境里的包
