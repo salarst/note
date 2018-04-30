@@ -1,6 +1,6 @@
 在实际开发当中，不同的项目可能会使用到不同的版本包，使用pyevn可以解决多个相互独立的Python环境，以达到在同一台机器上使用不同的版本包进行开发
 
-1.安装pyenv
+	1.安装pyenv
 		mkdir /usr/local/pyenv
 		cd pyenv
 		git clone https://github.com/pyenv/pyenv ./
