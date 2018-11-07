@@ -1,0 +1,67 @@
+Description:
+	Super daemon: xinetd
+	Instantaneous daemon: like "telnet、ftp、smptd"
+	
+	some processes is not frequently userd,we hope they do not run all the time to reduce waste of resources.only we need to access processes. the processes start.
+	finish access,the processes stop. 
+	The super daemon xinetd can meet out needs. 
+	
+	The super daemon funnctions:
+		xinetd can replace not frequence daemon to listen on the server,when we user a remote port to access a deamon ,like ftp. the request will accept by
+		xinetd.it knows the port belong to. then it will start the dest daemon,and forward the request to deamon.
+		
+		so we can use change deamon to Instantaneous daemon.and reach our purpose. 
+		
+
+Install:
+	yum -y install xinetd
+	
+	it will generate config file on /etc. config file named xinetd.config
+		vim /etc/xinetd.conf
+			defaults   //the global config 
+			{
+			# enabled =       //the options is not used generally. Instantaneous daemon switchd by itself,not here.
+			# disabled =  
+			log_type        = SYSLOG daemon info   //defaults options. xinetd use SYSLOG service to record logs, the "daemon info" indicates the log level
+			#we also set log_tpye = file /var/log/xinetd.log,  the use "man xinetd.conf" to see the help for log format. 
+			log_on_failure  = HOST                 
+			log_on_success  = PID HOST DURATION EXIT  //logs client's pid、 hostname、 duration time and exit time
+			
+			
+			cps             = 50 10      //connections per sencond. it will limit connections per second for user.first value is upper limit. second value is the server refuse time. when user exceed the connections it will refuse user to connect for the time. 
+			instances       = 50     //maximun connections,the value can large than cps
+			per_source      = 10     //Number of connections per IP
+			
+			v6only          = no
+			
+			groups          = yes
+			umask           = 002
+			
+			}
+	all Instantaneous deamon config file is in dir xinetd.d.
+	
+	e.g. config  telnet service as a Instantaneous daemon
+	
+	service telnet  //xinetd.d目录下的对应服务配置文件
+	{
+			flags           = REUSE   // reuse the connections
+			socket_type     = stream  //socket_type has two value: straem(TCP) and dgram(UDP)
+			wait            = no  // whether to wait for the end of previous connections when you access to service. this options only for TCP SERVICE
+			user            = root  
+			only_from =           //define white list to control who can access. 
+			no_access =    //define black list to deny access.  can not use white list and black list at the same time
+			server          = /usr/sbin/in.telnetd  // the service bin file
+			log_on_failure  += USERID   //if user "+" indicates that will add a fileds to defaults log format. if only use "=" is cover the default config
+			disable         = yes   //start on boot up, is equal to "chconfig telnet on"
+			access_time =   //define which time period can access
+	   bind = 172.17.1.10  //listen ip
+	   cps =    //can cover the default config
+	   per_source = 
+	   instances = 
+	   port = 23// when you want to change port ,you need modify value of telnet in /etc/services 
+	   
+}
+
+	
+	
+	
