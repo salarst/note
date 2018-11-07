@@ -1,0 +1,62 @@
+Description
+ ipmitoll is a tool for manage physical server management port. we can use ipmi restart server、set boot order and other operations on remote server.
+
+Usage:
+ ipmitool <options> [command]  
+	ipmitool SUBCOMMAND  --  press enter you can see help for subcommand
+	
+Install:
+	yum install OpenIPMI OpenIPMI-devel OpenIPMI-tools OpenIPMI-libs
+
+Start:
+	service ipmi start OR systemctl start ipmi
+	
+Configuration
+	1.set local machine management port
+		ipmitool lan set 1 ipaddr IP  //set ipaddr
+		ipmitool lan set 1 netmask NETMASK  //set netmask
+		ipmitool set 1 access on //turn on channel 1,  1 is channel id
+		ipmitool lan set 1 defgw ipaddr GW_IP //set gateway
+		
+		tips:
+			the channel id used by ecah verdor maybe differnt.please confirm with the verdor.
+	2.add a manage user, you can user "ipmitool user list CHANNEL_ID" to comfirm which id not be used. 
+		ipmitool user set name USERID USERNAME  //add user
+		ipmitool user set password USERID PASSWORD  //config password for user
+		
+	3.check config
+		#confirm network config
+			ipmitool lan print $CHANNEL_ID
+		#confirm user info
+			ipmitool user list $CHANNEL_ID 
+
+manage remote machines
+	#use options "I" to special a interface to communicate with remote machine.
+	ipmitool -I lan -H host_ip -U USERNAME -P PASSWORD [commands]
+	
+most useful commands
+	#view network configurations
+		ipmitool lan print $CHANNEL_ID
+	#view users
+		ipmitool user list $CHANNEL_ID
+	#view machine components,like disk sn,borad sn, product name,product manufacturer.
+		ipmitool fru print
+	#set boot order
+		ipmitool chassis bootdev [comamnds]
+			pxe   : Force PXE boot
+			disk  : Force boot from default Hard-drive
+			safe  : Force boot from default Hard-drive, request Safe Mode
+			diag  : Force boot from Diagnostic Partition
+			cdrom : Force boot from CD/DVD
+			bios  : Force boot into BIOS Setup
+			floppy: Force boot from Floppy/primary removable media
+	#manage machine power
+		#restart machine
+			ipmitool power reset 
+		#shutdown machine
+			ipmitool power off
+		#view power status
+			ipmitool power status
+	
+	#pleas set the help for other usages
+			
