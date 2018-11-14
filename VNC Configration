@@ -1,0 +1,44 @@
+Description:
+	rhel 6.5
+Install:
+	yum -y install vnc-server  
+	install gnome desktop
+Configration:	
+	vim /root/.vnc/xstartup
+	#change "twm" to "gnome-session" 
+
+Start:
+	#set password for vnc client,default user name is "root"
+	vncpasswd
+		input password:
+	#do multi times,can start up multi VNC desktop.
+	vncserver &   
+
+
+#autostart on boot up
+	The operaitons above will disappear when server restart.
+	Start vnc on boot up,you should modify vnc config file as follow:
+	
+	#set vncserver start on boot up
+		chkconfig vncserver on
+	vi /etc/sysconfig/vncservers
+		#add desktop id and username to VNCSERVERS. use ":" to split id adn username,use "space" to modify users.
+		VNCSERVERS="1:root 2:oracle"  
+		# set the resolution for each desktop.
+		VNCSERVERARGS[1]="-geometry 1024x768"
+		VNCSERVERARGS[2]="-geometry 1024x768"  
+	
+	then change passwod and start vncserver
+
+	
+
+#user vnc client to connect
+	input server ip and desktop id, format is "x.x.x.x:id"
+	
+
+
+#most useful commands
+	#view desktop id
+	vncserver -list
+	#kill desktop
+	vncserver -kill $ID

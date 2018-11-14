@@ -62,6 +62,10 @@ Install:
 	   
 }
 
+Start:
+	systemctl start xinetd
+	
+
 	
 	
 	
