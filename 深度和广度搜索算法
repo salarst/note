@@ -1,0 +1,52 @@
+
+
+广度优先：
+	从根开始，首先搜索与根相邻的点，所有点搜索完毕之后，再搜索与根相邻的点的相邻的点
+	
+	                 A
+	         B               C
+	       D     E              F
+				G
+A为根，每一次搜索BC，BC之后搜索DEF，DEF之后再搜索G
+
+深度优先：
+	沿着根，按一定的方向一直往下走，直到走到尽头，再后退回交叉口，再选择没走的过的路。
+
+如：从A--> B-->D 然后回退回B--E，然后回退回A->C-->F --> G
+
+搜索空间代码实现思路：
+	使用字典的方式把搜索空间全部存储起来。下层的名称存储在列表当中作为字典的值，字典的key取上层的值
+	如{'A':['B','C'],'B':['D','E']}
+
+广度搜索思路
+	次数	search_queue   order                     visit
+	0		    A	            []		                    []
+	1		    BC	          A		                      A
+	2		    CDE	          AB                        AB
+	3		    DEF	          ABC		                    ABC
+	
+
+import collections
+
+search_space = {}   假设已经确定搜索空间
+search_queue = deque()
+search_queue.append('A')
+order = []  #确定搜索路径
+visit = [] #主要用于计算搜索步骤用的。当能往一个节点有多条路径时，order会添加相同值，但是visit不会。len(visit)确定步长
+while search_queue:
+	node = search_queue.pop()
+	order.append(node)
+	
+	if (not node in visit) and search_space.has_key(node):
+		tmp = search_space[node]
+		for i in tmp:
+			search_queue.appendleft(i)  #由于是直接pop出来，所以是先进先出队列。所以要左边进，右边出，才能符合POP操作
+		visit.append(node) 
+		
+
+深度搜索算法：
+	深度搜索算法只是搜索方式不一样，代码实现差不多
+
+
+	
+
