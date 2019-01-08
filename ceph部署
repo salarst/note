@@ -1,0 +1,141 @@
+### 准备机器：
+	master-1: 10.1.3.135   mon
+	master-2: 10.1.3.134   mon
+	master-3: 10.1.3.136   mon
+	ceph-1: 10.1.3.139     osd     
+	ceph-2: 10.1.3.138     osd
+	ceph-3: 10.1.3.137     osd
+	admin: 10.1.3.140
+	osd机器挂载 3块500G的磁盘，分别为vdb vdc vdd
+	所有机器都有第二块内网网卡，网段为172.16.0.0/21
+	操作系统：CENTOS7.3
+	
+
+所有节点：
+	配置Ntp时间对齐
+	建立ceph yum源，本次使用的存储类型为bluestore。所以需要13.2版本
+	echo >> /etc/yum.repos.d/ceph.conf << EOF
+	[ceph]
+	name=ceph_13_2
+	baseurl=https://download.ceph.com/rpm-mimic/el7/x86_64/
+	enabled=1
+	gpgcheck=0
+	EOF
+	手动在所有mon osd节点上安装ceph包。尝试使用ceph-deploy安装会失败，改成手动安装
+	yum -y install ceph
+	
+admin:节点操作：
+	1.安装ceph-deploy,此次使用2.0版本。有些Yum使用的版本比较低，造成在启动Mon的时候使用的是service命令，造成mon无法启动。
+	后面查找原因发现，由于ceph-deploy版本过低导致。
+		rpm -ivh https://download.ceph.com/rpm-mimic/el7/noarch/ceph-deploy-2.0.0-0.noarch.rpm
+	
+	2.添加host解析
+		cat >> /etc/hosts << EOF
+		10.1.3.139 ceph-1
+		10.1.3.137 ceph-2
+		10.1.3.138 ceph-3
+		10.1.3.136 master-1
+		10.1.3.135 master-2
+		10.1.3.134 master-3
+		EOF
+	
+	3.打通admin到其他节点的ssh key login,并把hosts下发到其他节点
+		ssh-genkey -t rsa #不停回车
+	  输入各机器的登陆密码
+		for i in `cat /etc/hosts | grep -A 5 ceph-1 | awk '{print $2}'`;do ssh-copy-id -i /root/.ssh/id_rsa.pub $i;scp /etc/hosts $i:/etc/hosts;done
+	
+	4.部署mon到master机器上
+		mkdir /root/ceph
+		cd /root/ceph
+		
+	  初始化集群mon信息并生成配置文件
+		ceph-deploy new master-1 master-2 master-3
+		
+	  会在当前目录下生成ceph.conf，添加public network参数，指定对外提供存储服务的网段。本次网段为172.16.0.0/21
+		echo "public network=172.16.0.0/21"  #如果未指定网段，部署过程会报错，并打印出要求添加网段的信息在控制台
+	  
+	  启动mon服务,带上overwrite-conf，把修改过的配置下发给mon节点
+		ceph-deploy --overwrite-conf mon create master-1 master-2 master-3
+	
+	5.部署mgr节点到三台 master节点上。mgr可以提供额外的监控信息。采用主备的方式运行，ceph -s会返回多台mgr节点
+	  但是，真正运行mgr进程的只有active那台机器
+	  ceph-deploy --overwrite-conf mgr creawte master-1 master-2 master-3
+	
+	6.收集mon的key到本地目录备份
+		ceph-deploy mon create-initail
+	
+	 
+	7.验证：
+		在master机器上执行 ceph -s 返回如下：
+			 cluster:
+				id:     231c029f-1087-4104-999e-2525368dd25e
+				health: HEALTH_OK
+			
+			services:
+				mon: 3 daemons, quorum master-3,master-2,master-1
+				mgr: master-1(active), standbys: master-2, master-3
+				osd: 0 osds: 0 up, 0 in
+			
+		返回HEALTH_OK即可。如果没有安装mgr的话，会返回health_warn。如果没有打印其他信息，不影响集群使用
+	
+ceph osd节点操作：
+	本次使用bluestore功能建立osd。12.2以前使用的是filestore。firestore有写放大问题和ssd未优化问题。bluestore可以直接使用lvm裸设备
+	建立osd，跳过文件系统这一块，对于性能也有一定的提升。
+	每台ceph上挂了三台osd盘。建立一个VG，但是建立三个LV。这样当一块盘出现故障时，只要移出对应的OSD即可，不影响其他盘的读写
+	
+	1.把三块盘分区调整成8e lvm格式,使用fdisk命令
+	2.建立pv vg lv
+		pvcreate /dev/{vdb1,vdc1,vdd1}
+		vgcreate ceph-pool /dev/{vdb1,vdc1,vdd1}
+		lvcreate -L 500G -n ceph-osd1 ceph-pool
+		lvcreate -L 500G -n ceph-osd2 ceph-pool
+		lvcreate -L 500G -n ceph-osd3 ceph-pool
+
+admin节点操作
+	cd /root/ceph
+	1.建立osd
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd1 ceph-1
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd2 ceph-1
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd3 ceph-1
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd1 ceph-2
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd2 ceph-2
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd3 ceph-2
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd1 ceph-3
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd2 ceph-3
+		ceph-deploy --overwrite-conf osd create --bluestore --data ceph-pool/ceph-osd3 ceph-3
+	
+	2.下发key到各osd节点，以便osd节点在执行ceph命令时，不用指定key文件位置
+		ceph-deploy admin ceph-1 ceph-2 ceph-3
+	
+	3.验证,在任务mon或者osd节点执行
+		ceph -s
+		cluster:
+			id:     231c029f-1087-4104-999e-2525368dd25e
+			health: HEALTH_OK
+		
+		services:
+			mon: 3 daemons, quorum master-3,master-2,master-1
+			mgr: master-1(active), standbys: master-2, master-3
+			osd: 9 osds: 9 up, 9 in
+		
+		data:
+			pools:   0 pools, 0 pgs
+			objects: 0  objects, 0 B
+			usage:   5.1 GiB used, 4.4 TiB / 4.4 TiB avail
+			pgs: 
+		
+		返回osd有9个up 表示正常
+		
+		每个osd节点都会对每块盘启动一定数量的osd进程。以osd的id号为服务区别，osd的ID号可以使用ceph osd tree查看
+		ID CLASS WEIGHT  TYPE NAME       STATUS REWEIGHT PRI-AFF 
+		-1       4.37988 root default                            
+		-3       1.46500     host ceph-1                         
+		0   hdd 1.46500         osd.0       up  1.00000 1.00000 
+		-5       1.46489     host ceph-2                         
+		1   hdd 0.48830         osd.1       up  1.00000 1.00000 
+		3   hdd 0.48830         osd.3       up  1.00000 1.00000 
+		4   hdd 0.48830         osd.4       up  1.00000 1.00000 
+		-7       1.45000     host ceph-3                         
+		2   hdd 1.45000         osd.2       up  1.00000 1.00000
+		
+		osd.ID  就为ID号。  systemctl restart ceph-osd@ID.service进行服务启动和停止
