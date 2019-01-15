@@ -46,10 +46,12 @@ vim nexus.vmoptions\
 systemctl start nexus  启动之后，要过10分钟左右才能真正启动服务。如果nexus.log没有错误都是正常的
 
 #打开ip:8081端口，默认用户名和密码为admin/admin123
-	
-	
-打开设置，建立docker的repo，设置端口，如5000
-就可以在物理机上看到监听了5000端口
+  设置-->repository-->create repository -->docker(hostd) 建立docker repository
+#打开设置，建立docker的repo，设置端口，如5000
+  ##配置http和https的端口。本次配置http端口为5000
+  ##在Force basic authentication处启用匿名pull。
+	###设置了匿名pull之后，还需要在security处设置annomous的相关权限之后，才可以让docker仓库允许未登陆时pull镜像			
+  ##就可以在物理机上看到监听了5000端口
 
 docker配置：
 	在/etc/docker/daemon.json
@@ -58,9 +60,5 @@ docker配置：
 	
 systemctl restart docker
 
-然后只要使用docker tag 把镜像名称改成如下格式即可 
-
-
-这样配置的参数需要docker login之后才可以push pull镜像
 
 
