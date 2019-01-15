@@ -1,0 +1,286 @@
+机器准备：
+	k8s-1: 10.1.3.125 master
+	k8s-2: 10.1.3.126 master
+	k8s-3: 10.1.3.127 master
+	node-1: 10.1.3.133 worker
+	node-2: 10.1.3.132 worker
+	node-3: 10.1.3.131 worker
+	工作机一台
+	
+	操作系统：centos 7.3
+	docker-engine: docker-ce-18.06
+	k8s version: v1.13.0
+	kubeadm: 1.13.2
+	etcd: 3.2.24
+		
+工作机上执行：
+	#添加host解析到/etc/hosts
+	
+	mkdir /tmp/k8s && cd /tmp/k8s
+	
+	#把所有节点的IP添加到iplist文件当中
+
+	#修改内核参数，以符合k8s要求
+	echo """
+	vm.swappiness = 0
+	net.bridge.bridge-nf-call-ip6tables = 1
+	net.bridge.bridge-nf-call-iptables = 1
+	""" >> k8s.conf
+	
+	#生成一个k8s aliyun的yum源aliyun.repo，内容如下
+	[aliyun]
+	name=centos 7.3.1611
+	baseurl=https://mirrors.aliyun.com/centos/7/os/x86_64/
+	enabled=1
+	gpgcheck=0
+
+	[kubernetes]
+	name = kubernetes
+	baseurl=https://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64/
+	enabled=1
+	gpgcheck=0
+	
+	#生成docker的配置文件daemon.json,内容如下
+	{
+        "insecure-registries": ["10.1.3.90","k8s.gcr.io","gcr.io","quay.io"],
+        "graph":"/data/docker/root",
+        "storage-driver": "devicemapper",
+        "selinux-enabled": false
+	}
+	
+	#打通ssh密钥，并把hosts,daemon.json,k8s.conf复制到对应目录下
+	for i in `cat iplist`;ssh-copy-id -i /root/.ssh/id_rsa.pub $i;\
+	scp /etc/hosts/ $i:/etc; ssh $i "mkdir /etc/docker;mkdir /etc/kubernetes/pki/";\
+	scp daemon.json $i:/etc/docker;\
+	scp k8s.conf /etc/sysctl.conf.d/;scp aliyun.repo $i:/etc/yum.repos.d/;done
+	
+	#节点安装kubeadm kubelet docker-ce等rpm包
+	for i in `cat iplist`;do ssh $i 'yum -y install docker-ce kubelet kubeadm';done
+	
+#所有节点执行如下操作：
+	在docker.service添加如下内容：
+	ExecStart=/usr/bin/dockerd -H tcp://0.0.0.0:2375 -H unix:///var/run/docker.sock  
+	
+	#iptables开启转发，以保证不同主机之间的pod通信能够正常进行
+	ExecStartPost=/usr/sbin/iptables -P FORWARD ACCEPT  
+	ExecStartPost=/usr/sbin/iptables -P INPUT ACCEPT
+	
+	systemctl daemon-reload
+	systemctl enable docker
+	systemctl enable kubelet
+	systemctl start docker
+	
+	#使用复制过来的k8s.conf文件生效
+	sysctl -p 
+	
+
+#在三台master节点上执行如下操作
+	#放行etcd 2379 2380 apiserver的6443端口，以便在集群在初始化时，能够进行通信
+	firewall-cmd --add-port=6443/tcp
+	firewall-cmd --add-port=6443/tcp --per
+	firewall-cmd --add-port=2379/tcp 
+	firewall-cmd --add-port=2379/tcp --per
+	firewall-cmd --add-port=2380/tcp --per
+	firewall-cmd --add-port=2380/tcp 
+
+	
+
+k8s-1上操作，采用configmap的方式初始化：
+	#使用keepalive给三台master节点做ha，会生成一个vip。此次实验没配置keepalive。所以把vip直接设置在k8s-1上
+	#正式环境请做keepalive,并保证k8s-1会成为vrrp当中的master
+	ifconfig eth0:1 10.1.3.141/24 up
+	#建立cm文件--kubeconfig.yml
+		#老版本使用的alphav1版本，新版本已经废弃
+		apiVersion: kubeadm.k8s.io/v1beta1
+		kind: ClusterConfiguration
+		kubernetesVersion: v1.13.0
+		apiServer:
+			#certSANS指定的IP地址三台k8s集群以及vip的地址，这样生成的证书就可以给这些节点的主机名和IP使用
+			certSANs:
+			- k8s-1
+			- k8s-2
+			- k8s-3
+			- 10.1.3.125
+			- 10.1.3.126
+			- 10.1.3.127
+			- 10.1.3.141
+		#此超时时间主要是设置等待初始化过程等待docker容器起来的时间，多次部署都会超时，好像也影响
+		timeoutForControlPlane: 4m0s
+		#此处设置admin.conf当中配置的apiserver的访问地址。此处使用vip
+		controlPlaneEndpoint: "10.1.3.141:6443"
+		clusterName: "sg-cluster"
+		networking:
+			#配置service的网络
+			serviceSubnet: "172.16.16.0/21"
+			配置pod的网络
+			podSubnet: "172.16.8.0/21"
+			dnsDomain: "cluster.local"
+		
+	#初始化成k8s master角色,如果有swap空间，请先关闭
+	kubeadm init --config=kubeconfig.yml
+	
+	#初始化完成之后，会在最后打印如下内容，请保存好。
+	#此串内容是用于worker加入集群的命令
+	kubeadm join 10.1.3.141:6443 --token uf0gcc.ik0miyqmjuh7ye57 --discovery-token-ca-cert-hash\
+	sha256:0fd5b52e54fcfe2b39db9e19cecc63211d74b80d1a651d53db749dc2aa74038e
+	
+	
+	#验证：
+	mkdir /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config
+	kubectl get nodes
+	#get出来的nodes是处于未ready状态，这是由于k8s的网络插件还没安装好
+	
+	#安装网络插件
+	kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+	
+	#安装完成之后，再验证,发现master状态已经变成ready状态
+	kubectl get nodes
+	
+	#把k8s-1上的证书分别复制到其他两台节点上
+	NODES="k8s-2 k8s-3"
+	CERTS=$(find /etc/kubernetes/pki/ -maxdepth 1 -name '*ca.*' -o -name '*sa.*')
+	ETCD_CERTS=$(find /etc/kubernetes/pki/etcd/ -maxdepth 1 -name '*ca.*')
+	for NODE in $NODES; do
+	ssh $NODE mkdir -p /etc/kubernetes/pki/etcd
+	scp $CERTS $NODE:/etc/kubernetes/pki/
+	scp $ETCD_CERTS $NODE:/etc/kubernetes/pki/etcd/
+	scp /etc/kubernetes/admin.conf $NODE:/etc/kubernetes
+	done
+
+#在k8s-2,k8s-3上依次执行如下命令
+	
+	#想把节点加入到k8s集群当中，并成为master解决，需要在使用kubeadm join时使用--experimental-control-plane参数
+	kubeadm join 10.1.3.141:6443 --token uf0gcc.ik0miyqmjuh7ye57 --discovery-token-ca-cert-hash\
+	sha256:0fd5b52e54fcfe2b39db9e19cecc63211d74b80d1a651d53db749dc2aa74038e
+	
+	遇到的问题：
+	1.在k8s-2加入到集群时，报错了。
+	解决办法：在k8s-3未加入集群时，不要去处理这个问题，因为在etcd已经成为集群模式下时，如果把k8s-2的etcd删除掉或者使用kubeadm reset
+		掉时，会影响k8s-1的etcd，从而导致整个k8s集群不可用。此时应该先尝试把k8s-3加入到集群当中。k8s-3加入集群成功之后。再使用
+		kubeadm reset重置k8s-s
+	2.k8s-2节点在kubeadm reset之后，重新jion到集群，报etcd context exceeded。还是无法加入到集群。
+	解决办法：在k8s-1或者k8s-3上登陆etcd容器，并使用如下命令查看集群情况,命令如下
+		docker exec -it $etcd_docker_id sh
+		ETCDCTL_API=3
+		CA=/etc/kubernetes/pki/etcd
+		etcdctl --endpoints=https://127.0.0.1:2379 --ca-file=$ca/ca.crt --cert-file=$ca/server.crt --key-file=$ca/server.key member list
+		2e10720b5951d7cc: name=k8s-3 peerURLs=https://10.1.3.127:2380 clientURLs=https://10.1.3.127:2379 isLeader=true
+		6426d7e591131d7d: name=k8s-2 peerURLs=https://10.1.3.126:2380 clientURLs=https://10.1.3.126:2379 isLeader=false
+		a3f318535a88966a: name=k8s-1 peerURLs=https://10.1.3.125:2380 clientURLs=https://10.1.3.125:2379 isLeader=false
+		
+		从上看到etcd集群认为运行在k8s-2的etcd容器还存在，并且是正常的，实际情况是使用了kubeadm reset之后，etcd容器已经被删除，
+		所以此处应该是脏数据，应该在etcd集群当中移除k8s-2的节点信息
+		etcdctl --endpoints=https://127.0.0.1:2379 --ca-file=$ca/ca.crt --cert-file=$ca/server.crt --key-file=$ca/server.key member remove 6426d7e591131d7d 
+		
+		删除之后，重新使用kubeadm join命令成功加入到k8s集群
+	
+k8s集群验证:
+	kubectl get nodes
+	NAME     STATUS   ROLES    AGE   VERSION
+	k8s-1    Ready    master   21h   v1.13.2  #三台节点的roles都为master
+	k8s-2    Ready    master   20h   v1.13.2
+	k8s-3    Ready    master   20h   v1.13.2
+	
+	kubectl get pods -n kube-system
+	#此命令看到etcd apiserver scheduler controller等组件分别都运行一份在master节点上
+	NAME                            READY   STATUS    RESTARTS   AGE   IP           NODE     NOMINATED NODE   READINESS GATES
+	coredns-86c58d9df4-lrbsg        1/1     Running   0          21h   172.16.8.5   k8s-1    <none>           <none>
+	coredns-86c58d9df4-nbn5n        1/1     Running   0          21h   172.16.8.4   k8s-1    <none>           <none>
+	etcd-k8s-1                      1/1     Running   0          21h   10.1.3.125   k8s-1    <none>           <none>
+	etcd-k8s-2                      1/1     Running   0          20h   10.1.3.126   k8s-2    <none>           <none>
+	etcd-k8s-3                      1/1     Running   0          21h   10.1.3.127   k8s-3    <none>           <none>
+	kube-apiserver-k8s-1            1/1     Running   0          21h   10.1.3.125   k8s-1    <none>           <none>
+	kube-apiserver-k8s-2            1/1     Running   1          20h   10.1.3.126   k8s-2    <none>           <none>
+	kube-apiserver-k8s-3            1/1     Running   1          21h   10.1.3.127   k8s-3    <none>           <none>
+	kube-controller-manager-k8s-1   1/1     Running   8          21h   10.1.3.125   k8s-1    <none>           <none>
+	kube-controller-manager-k8s-2   1/1     Running   8          20h   10.1.3.126   k8s-2    <none>           <none>
+	kube-controller-manager-k8s-3   1/1     Running   4          21h   10.1.3.127   k8s-3    <none>           <none>
+	kube-flannel-ds-amd64-92qzw     1/1     Running   1          20h   10.1.3.133   node-1   <none>           <none>
+	kube-flannel-ds-amd64-bt8wc     1/1     Running   0          21h   10.1.3.125   k8s-1    <none>           <none>
+	kube-flannel-ds-amd64-gzxml     1/1     Running   1          19h   10.1.3.131   node-3   <none>           <none>
+	kube-flannel-ds-amd64-jdllc     1/1     Running   0          21h   10.1.3.127   k8s-3    <none>           <none>
+	kube-flannel-ds-amd64-jjwcb     1/1     Running   1          20h   10.1.3.132   node-2   <none>           <none>
+	kube-flannel-ds-amd64-lt7d7     1/1     Running   0          20h   10.1.3.126   k8s-2    <none>           <none>
+	kube-proxy-87m6s                1/1     Running   0          20h   10.1.3.126   k8s-2    <none>           <none>
+	kube-proxy-gn9cb                1/1     Running   0          20h   10.1.3.133   node-1   <none>           <none>
+	kube-proxy-jnxhs                1/1     Running   0          19h   10.1.3.131   node-3   <none>           <none>
+	kube-proxy-kc4ks                1/1     Running   0          21h   10.1.3.127   k8s-3    <none>           <none>
+	kube-proxy-lv7g6                1/1     Running   0          20h   10.1.3.132   node-2   <none>           <none>
+	kube-proxy-nrcx8                1/1     Running   0          21h   10.1.3.125   k8s-1    <none>           <none>
+	kube-scheduler-k8s-1            1/1     Running   6          21h   10.1.3.125   k8s-1    <none>           <none>
+	kube-scheduler-k8s-2            1/1     Running   5          20h   10.1.3.126   k8s-2    <none>           <none>
+	kube-scheduler-k8s-3            1/1     Running   4          21h   10.1.3.127   k8s-3    <none>           <none>
+	
+	#获取kubeadm-config的内容，确认三台机器都被记录成k8s master
+	kubectl get cm kubeadm-config -n kube-system -o yaml
+	apiVersion: v1
+	data:
+	  ClusterConfiguration: |
+	  apiServer:
+	    certSANs:
+		  - k8s-1
+		  - k8s-2
+		  - k8s-3
+		  - 10.1.3.125
+		  - 10.1.3.126
+		  - 10.1.3.127
+		  - 10.1.3.141
+		  extraArgs:
+		    authorization-mode: Node,RBAC
+	  timeoutForControlPlane: 4m0s
+	  apiVersion: kubeadm.k8s.io/v1beta1
+	  certificatesDir: /etc/kubernetes/pki
+	  clusterName: sg-cluster
+	  controlPlaneEndpoint: 10.1.3.141:6443
+	  controllerManager: {}
+	  dns:
+		type: CoreDNS
+	  etcd:
+		local:
+		  dataDir: /var/lib/etcd
+	  imageRepository: k8s.gcr.io
+	  kind: ClusterConfiguration
+	  kubernetesVersion: v1.13.0
+	  networking:
+		dnsDomain: cluster.local
+		podSubnet: 172.16.8.0/21
+		serviceSubnet: 172.16.16.0/21
+	  scheduler: {}
+	  ClusterStatus: |
+		apiEndpoints:
+		  k8s-1:
+			advertiseAddress: 10.1.3.125   #此处成功记录了三台apiserver的信息，分别为三台master节点
+			bindPort: 6443
+		  k8s-2:
+			advertiseAddress: 10.1.3.126
+			bindPort: 6443
+		  k8s-3:
+			advertiseAddress: 10.1.3.127
+			bindPort: 6443
+		apiVersion: kubeadm.k8s.io/v1beta1
+		kind: ClusterStatus
+	kind: ConfigMap
+	metadata:
+	  creationTimestamp: "2019-01-14T04:52:47Z"
+	  name: kubeadm-config
+	  namespace: kube-system
+	  resourceVersion: "2744"
+	  selfLink: /api/v1/namespaces/kube-system/configmaps/kubeadm-config
+	  uid: 3cbaef47-17b8-11e9-961c-40c198a0daa4
+	
+
+#node节点加入集群
+kubeadm join 10.1.3.141:6443 --token uf0gcc.ik0miyqmjuh7ye57 --discovery-token-ca-cert-hash\
+sha256:0fd5b52e54fcfe2b39db9e19cecc63211d74b80d1a651d53db749dc2aa74038e
+
+验证：
+	[root@k8s-1 tmp]# kubectl get nodes
+	NAME     STATUS   ROLES    AGE   VERSION
+	k8s-1    Ready    master   21h   v1.13.2
+	k8s-2    Ready    master   20h   v1.13.2
+	k8s-3    Ready    master   20h   v1.13.2
+	node-1   Ready    <none>   19h   v1.13.2
+	node-2   Ready    <none>   19h   v1.13.2
+	node-3   Ready    <none>   19h   v1.13.2
+	
+部署完毕
