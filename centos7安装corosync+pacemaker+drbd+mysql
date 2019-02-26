@@ -1,0 +1,277 @@
+mysql主从，当主挂掉时，从库只能读不能写，服务会有一段时间不可用。当把主从都做成高可用之后,可以解决此类问题。
+但在从库change master to时，应该master_host的地址应该指成VIP的地址，这样不管主如何切换从都能进行数据同步，具体还未实验。
+参考链接：https://www.lisenet.com/2016/activepassive-mysql-high-availability-pacemaker-cluster-with-drbd-on-centos-7/
+
+1.静态解析
+2.ssh互信
+3.关闭防火墙
+4.关闭selinux
+
+一、 安装corosync、pacemaker、pcs
+	1. yum源安装
+	yum -y install pcs pacemaker corosync
+	2. 修改hacluster密码
+	此用户会在安装pcs时自动生成，需要修改密码供后面使用，两台机器上都需要修改
+	node1# echo "123456" | passwd hacluster --stdin
+	node2# echo "123456" | passwd hacluster --stdin
+	3. 设置pcs开启启动，并启动pcs服务
+	systemctl enable pcsd
+	systemctl start pcsd
+	4. HA认证并生成corosync.conf文件
+	pcs cluster auth node1 node2 -u hacluster -p 123456
+	
+	#在/etc/corosync下生成配置文件
+	pcs cluster setup --name mycluster node1 node2
+	5. 修改corosync启动配置认证
+	totem {
+	    version: 2
+	    cluster_name: mysqldrbd   #
+	    secauth: on
+	    transport: udpu
+	}
+	
+	nodelist {
+	    node {
+	        ring0_addr: mysql-router
+	        nodeid: 1
+	    }
+	
+	    node {
+	        ring0_addr: mysql-master
+	        nodeid: 2
+	    }
+	}
+	
+	quorum {
+	    provider: corosync_votequorum
+	    two_node: 1   #此选择表示只有两台节点
+	}
+	
+	logging {
+	    to_logfile: yes
+	    logfile: /var/log/cluster/corosync.log
+	    to_syslog: yes
+	}
+	同步给其他机器
+	pcs cluster sync
+	6. 开机启动corosync和pacemaker
+	pcs cluster enable --all
+	7. 启动corosync+pacemaker
+	pcs cluster start --all
+	
+	8. 验证：
+	pcs status
+	Cluster name: mysqldrbd
+	
+	WARNINGS:
+	No stonith devices and stonith-enabled is not false  #没有stonish设备
+	
+	Stack: corosync
+	Current DC: mysql-master (version 1.1.19-8.el7_6.4-c3c624ea3d) - partition with quorum
+	Last updated: Mon Feb 25 01:21:55 2019
+	Last change: Mon Feb 25 01:05:09 2019 by hacluster via crmd on mysql-master
+	
+	2 nodes configured
+	0 resources configured
+	
+	Online: [ node1 node2 ]  #两个机器都要在线才行
+	
+	No resources
+	
+	
+	Daemon Status:
+	  corosync: active/enabled
+	  pacemaker: active/enabled
+	  pcsd: active/enabled
+	
+
+	9. 禁用stonish设备
+	pcs property set stonish-enabled=false
+	pcs property set no-quorum-policy=ignore
+
+二、安装drbd
+
+	1. 添加yum源并安装drbd的内核驱动和drbd-utils
+	rpm --import https://www.elrepo.org/RPM-GPG-KEY-elrepo.org
+	rpm -Uvh http://www.elrepo.org/elrepo-release-7.0-2.el7.elrepo.noarch.rpm
+	yum -y install drbd90-utils kmod-drbd90
+	
+	#重启机器，只有重启之后才能加载内核模块
+	shutdown -r now 
+	modprobe drbd
+	#重启之后要重新启动corosync和pacamaker
+	pcs cluster start --all  
+	
+  2. 配置drbd的res资源文件
+	vim /etc/drbd.d/global-common.conf
+	global {
+	        #usage-count yes;    //注释掉，会向开发者发送安装信息
+	        # minor-count dialog-refresh disable-ip-verification
+	}
+	
+	common {   //通用属性配置
+	        handlers {
+	                # These are EXAMPLE handlers only.
+	                # They may have severe implications,
+	                # like hard resetting the node under certain circumstances.
+	                # Be careful when chosing your poison.
+	
+	                 pri-on-incon-degr "/usr/lib/drbd/notify-pri-on-incon-degr.sh; /usr/lib/drbd/notify-emergency-reboot.sh; echo b > /proc/sysrq-trigger ; reboot -f";  //man drdb.conf
+	                 pri-lost-after-sb "/usr/lib/drbd/notify-pri-lost-after-sb.sh; /usr/lib/drbd/notify-emergency-reboot.sh; echo b > /proc/sysrq-trigger ; reboot -f";
+	                 local-io-error "/usr/lib/drbd/notify-io-error.sh; /usr/lib/drbd/notify-emergency-shutdown.sh; echo o > /proc/sysrq-trigger ; halt -f";
+	                # fence-peer "/usr/lib/drbd/crm-fence-peer.sh";
+	                # split-brain "/usr/lib/drbd/notify-split-brain.sh root";
+	                # out-of-sync "/usr/lib/drbd/notify-out-of-sync.sh root";
+	                # before-resync-target "/usr/lib/drbd/snapshot-resync-target-lvm.sh -p 15 -- -c 16k";
+	                # after-resync-target /usr/lib/drbd/unsnapshot-resync-target-lvm.sh;
+	        }
+	
+	        startup {
+	                # wfc-timeout degr-wfc-timeout outdated-wfc-timeout wait-after-sb
+	        }
+	
+	        options {
+	                # cpu-mask on-no-data-accessible
+	        }
+	
+	        disk {
+	                # size max-bio-bvecs on-io-error fencing disk-barrier disk-flushes
+	                # disk-drain md-flushes resync-rate resync-after al-extents
+	                # c-plan-ahead c-delay-target c-fill-target c-max-rate
+	                # c-min-rate disk-timeout
+	                c-max-rate 200M;   //设置主机之间同步数据时，所占用的网络带宽，按实际来  Mb
+	                on-io-error detach;  //当出现io错误时，拆除磁盘
+	        }
+	
+	        net {
+	                # protocol timeout max-epoch-size max-buffers unplug-watermark
+	                # connect-int ping-int sndbuf-size rcvbuf-size ko-count
+	                # allow-two-primaries cram-hmac-alg shared-secret after-sb-0pri
+	                # after-sb-1pri after-sb-2pri always-asbp rr-conflict
+	                # ping-timeout data-integrity-alg tcp-cork on-congestion
+	                # congestion-fill congestion-extents csums-alg verify-alg
+	                # use-rle
+	                protocol C;   //使用drbd 数据同步协议C(同步)
+	                cram-hmac-alg "sha1";   //主机之间传输数据时加密，如果在安全的环境下 可不加密
+	                shared-secret "mydrbd";  //如果上面不启用，此项不用
+	        }
+	}
+	
+	定义drbd资源，必须以res结尾
+	vim /etc/drbd.d/mysqldrbd.res
+	resource mysqldrbd {  //mydrbd为资源名称，在使用drbdadm create-md时 后面跟的就是此名称
+	        disk /dev/sdb5;   //没有在node括号中的为 所有drbd主机的通用属性，此处指定drbd分区
+	        device /dev/drbd0;  //指定drbd设备文件名称，在drbdadm create-dm时，建立此设备文件名
+	        meta-disk internal;  //指定drbd元数据存放位置 ， internal为 存放在/dev/sdb5当中
+	        on node1 {  //node1的特有属性
+	                address 172.16.1.101:7789;     //指定用于传输数据的网络地址，默认监听在7789端口上
+	        }
+	        on node2 {
+	                address 172.16.1.102:7789;
+	        }
+	}
+	
+	建议：disk也可以使用lvm的lv设备。建议使用lvm设备这样后期磁盘扩展比较方便
+   3. 建立drbd设备
+	#建立mysqldrbd资源同时启动mysqldrbd
+	all: drbdadm create-md mysqldrbd
+	all: drbdadm up mysqldrbd
+	
+	#初始化，只要单台即可，另外一台在pcs资源定义之后会自动同步，此台节点初始化后，mysql也在此台节点上初始化
+	#在实验过程中，第一次实例两台的机器都手动初始化过，在做pcs资源定义后，drbd一直起不来。原因未知，但是只做单台初始化后成功了
+	mysql-master: drbdadm priamry --force mysqldrbd
+	
+	#验证：
+		drbdadm status   看到此台节点disk为uptodate，role为mprimary即可
+ 
+ 4.配置mysql与drbd盘关联
+	#对drbd0进行格式化
+	mkfs.xfs /dev/drbd0
+	mount /dev/drbd0 /data/mysql
+	#安装完成mysql之后，对mysql进行初始化
+	mysql_install_db --user=mysql --datadir=/data/mysql --basedir=/usr
+	#初始化完成之后，会在/usr下生成my.cnf的配置文件，修改其中的datadir basedir等信息。同时把my.cnf复制一分到其他节点的/usr下
+	
+	#确认MYSQL能正常启动
+	systemctl start mysql
+	
+	#确认没问题后,关mysql，同时取消开机启动。开启启动交给pcs来做
+	systemctl stop mysql
+	systemctl disable mysql
+	
+	#取消挂载，将由pcs选择master进行挂载
+	
+ 5.定义高可用资源
+	#由于没有stonish 设备，同时只有两台节点所以要修改参数
+	pcs property set stonish-enabled=false
+	pcs property set no-quorum-policy=ignore
+	
+	#设置阻止故障恢复后，资源转移。就是当机器故障恢复之后，原先在故障机器上的资源又从其他节点转回来。这样会提高服务不可用的时间
+	 pcs  resource defaults resource-stickiness=200
+	#定义资源之前，先把pcs配置文件导一份到文件当中，然后使用此文件进行定义资源，确认没问题之后再提交
+	##导出配置文件到cib.cfg
+	pcs cluster cib cib.cfg
+	#定义drbd资源
+	pcs -f cib.cfg resource create mysqldrbd ocf:linbit:drbd drbd_resource=mysqldrbd op monitor interval=30s  
+	
+	#定义drbd的克隆资源，克隆资源表示所有节点上都会运行副本。
+	pcs -f cib.cfg resource master drbdclone mysqldrbd master-max=1 master-node-max=1 clone-max=2 clone-node-max=1 notify=true
+		master-max:  有几个副本可以成为master,mysql服务只有一个，所以也只能使用一个master
+		master-node-max:  一台节点是可以跑多少个master
+		clone-max:  有几个副本，一般几台机器就几个
+		clone-node-max:  一台机器上有几个副本
+		notify:  当副本停止时，通知其他副本
+		
+	#定义mysql目，定义mysql服务，定义mysqlVip
+	pcs -f cib.cfg resource mysqlStore ocf:heartbeat:Filesystem device=/dev/drbd0 directory=/data/mysql fstype=ext4
+		fstype: 指定/dev/drbd0的文件系统
+		device: 指定drbd的设备文件，在drbd.conf当中定义的device
+		direcotry: 表示drbd将被pcs挂载到的挂载点
+	#定义vip
+	pcs -f cib.cfg resource create mysqlVip ocf:heartbeat:IPaddr ip=10.1.3.112 cidr_netmask=32 op monitor interval=20s
+	
+	#把mysqlVip mysqlStore mysqlService 添加组当中，由于mysqlStore要先于mysqlService启动，mysqlService要先于mysqlVip启动，所以在加入组当中时，要注意招安mysqlStore,mysqlService,mysqlVip顺序加入，这样在选择时会按组中顺序启动
+	pcs resource group add mysqlHA mysqlStore mysqlService mysqlVip   #mysqlHA为group name
+	
+           #定义drbdclone与mysqlStore的关系，由于mysqlStore存在于mysqlHA,所以定义drbdclone优于mysqlHA启动即可，同时drbdclone与mysqlHA里的资源         
+             要运行在同一个节点，这样mysqlStore才能挂载/dev/drbd0
+	##定义资源运行在同一个节点上
+	pcs -f cib.cfg constraint colocation add mysqlHA with drbdclone INFINITY with-rsc-role=Master
+	##定义启动顺序
+	pcs -f cib.cfg constraint order promote drbdclone then start mysqlHA
+	
+	#验证：
+		pcs -f cib.cfg config show 确认定义的资源和约束关系没有问题
+		pcs cluster cib-push cib.cfg  提交配置文件
+		
+		#查看HA资源的状态
+		pcs status
+		Cluster name: mysql_cluster
+		Stack: corosync
+		Current DC: mysql-master (version 1.1.19-8.el7_6.4-c3c624ea3d) - partition with quorum
+		Last updated: Tue Feb 26 00:28:26 2019
+		Last change: Tue Feb 26 00:22:21 2019 by root via cibadmin on mysql-master
+		
+		2 nodes configured
+		5 resources configured
+		
+		Online: [ mysql-master mysql-router ]
+		
+		Full list of resources:
+		
+		 Master/Slave Set: drbdclone [mysqldrbd]   //drbdclone已经同时运行在两个节点上
+		     Masters: [ mysql-master ]
+		     Slaves: [ mysql-router ]
+		 Resource Group: mysqlHA
+		     mysqlStore (ocf::heartbeat:Filesystem):    Started mysql-master   //已启动
+		     mysqlService       (lsb:mysql):    Started mysql-master //已启动
+		     mysqlVip   (ocf::heartbeat:IPaddr):        Started mysql-master //已启动
+		
+		Daemon Status:
+		  corosync: active/disabled
+		  pacemaker: active/disabled
+		  pcsd: active/enabled
+		
+致此，已完成mysql+drbd+pacemaker+corosync
+
+
