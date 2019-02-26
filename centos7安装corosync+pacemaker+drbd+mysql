@@ -1,5 +1,6 @@
 mysql主从，当主挂掉时，从库只能读不能写，服务会有一段时间不可用。当把主从都做成高可用之后,可以解决此类问题。
-但在从库change master to时，应该master_host的地址应该指成VIP的地址，这样不管主如何切换从都能进行数据同步，具体还未实验。
+但在从库change master to时，应该master_host的地址应该指成VIP的地址，这样不管主如何切换从都能进行数据同步.
+但是有个问题，当主mysql进行ha切换之后生成新的bin-log，slave读不到。一直会停在前一个binlog上。此问题未解
 参考链接：https://www.lisenet.com/2016/activepassive-mysql-high-availability-pacemaker-cluster-with-drbd-on-centos-7/
 
 1.静态解析
