@@ -19,11 +19,11 @@ A为根，每一次搜索BC，BC之后搜索DEF，DEF之后再搜索G
 	如{'A':['B','C'],'B':['D','E']}
 
 广度搜索思路
-	次数	search_queue   order                     visit
-	0		    A	            []		                    []
-	1		    BC	          A		                      A
-	2		    CDE	          AB                        AB
-	3		    DEF	          ABC		                    ABC
+	次数	search_queue             order                     visit
+	0		    A	            []		               []
+	1		    BC	             A		                A
+	2		    CDE	             AB                         AB
+	3		    DEF	             ABC		        ABC
 	
 
 import collections
