@@ -6,6 +6,8 @@ nexus repository manager是一个强大的容器类软件，可以存储各种�
 	下载nexus-3.14.0-04-unix.tar.gz包
 tar xf nexus-3.14.0-04-unix.tar.gz -C /data/nexus
 
+useradd nexus
+chown -R nexus.nexus /data/apps/nexus
 #同时到nexus官网下载systemctl启动脚本
 [Unit]
 Description=nexus service
