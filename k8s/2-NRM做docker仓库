@@ -54,7 +54,7 @@ systemctl start nexus  启动之后，要过10分钟左右才能真正启动服�
   ##在Force basic authentication处启用匿名pull。
 	###设置了匿名pull之后，还需要在security处设置annomous的相关权限之后，才可以让docker仓库允许未登陆时pull镜像			
   ##就可以在物理机上看到监听了5000端口
-
+  ##还要配置security-->realms-->docker bearer token realm 移动到右边。表示激活docker registry的认证功能（不激活无法登陆）
 docker配置：
 	在/etc/docker/daemon.json
 	"insecure-registries": ["ip:50000"]  #insecure表示使用http协议
