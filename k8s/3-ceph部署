@@ -64,8 +64,10 @@ admin:节点操作：
 	6.收集mon的key到本地目录备份
 		ceph-deploy mon create-initail
 	
-	 
-	7.验证：
+	7.把管理员密钥(ceph.client.admin.keyring)下发各节点,此key是执行create-initail时收集上来的
+		ceph-deploy admin masster-1 master-2 master-3
+ 
+	8.验证：
 		在master机器上执行 ceph -s 返回如下：
 			 cluster:
 				id:     231c029f-1087-4104-999e-2525368dd25e
