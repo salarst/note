@@ -8,12 +8,14 @@
 ### cpu测试脚本
 ```
 #!/usr/bin/python
-	i = 0
-	while True:
-       i += 1
+i = 0
+while True:
+    i += 1
 ```
 
-	./cpu.py
+```
+./cpu.py
+```
 top 查看当前cpu.py的cup使用情况
 ![](https://github.com/salarst/note/blob/master/img/cpu_usage.png)
 可看出cpu使用率为100%
