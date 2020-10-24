@@ -35,7 +35,7 @@ echo 24289 > tasks
 import time
    #表示1G
 size = 1*1024*1024*1024 
-   #1个空间为1B，此处写10G
+   #1个空格为1B，此处写1G
 while True:
     a = ' ' * size
     time.sleep(1)
