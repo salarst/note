@@ -33,7 +33,7 @@ echo 24289 > tasks
 ```
 #!/usr/bin/python
 import time
-   #表示10G
+   #表示1G
 size = 1*1024*1024*1024 
    #1个空间为1B，此处写10G
 while True:
@@ -44,7 +44,7 @@ while True:
 ./mem.py
 ```
 top查看,可发现内存在不停的增加
-利用memeory子系统，限制内存为5G
+利用memeory子系统，限制内存为10m
 ```
 cd /sys/fs/cgroup/memory
 mkdir test
